@@ -1,0 +1,197 @@
+version: "3.7"
+services:
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    # line above must be uncommented to allow external containers to connect.
+    # See https://github.com/qdm12/gluetun-wiki/blob/main/setup/connect-a-container-to-gluetun.md#external-container-to-gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - 8888:8888/tcp # HTTP proxy
+      - 8388:8388/tcp # Shadowsocks
+      - 8388:8388/udp # Shadowsocks
+      - 8080:8080
+      - 9696:9696
+      - 8989:8989
+      - 7878:7878
+      - 6881:6881
+      - 6881:6881/udp
+      - 5055:5055
+      # Other services
+      # qBittorrent
+    volumes:
+      - /plex/config/gluetun:/gluetun
+    environment:
+      # I specify the PUID and PGID but this is optional (default is 1000,1000), description from Wiki "User ID/Group ID to run as non root and for ownership of files written"
+      - PUID=1000
+      - PGID=1000
+      # See https://github.com/qdm12/gluetun-wiki/tree/main/setup#setup
+      #- VPN_SERVICE_PROVIDER=protonvpn
+      #- VPN_TYPE=wireguard
+      # OpenVPN:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - OPENVPN_USER=your_openvpn_user
+      - OPENVPN_PASSWORD=your_open_vpn_password
+      # Wireguard:
+      #- WIREGUARD_PUBLIC_KEY=your_wireguard_public_key # "PublicKey" under [Peer] in WG Config
+      #- WIREGUARD_PRIVATE_KEY=your_wireguard_private_key # "PrivateKey" under [Interface] in WG Config - only shown on config creation
+      #- WIREGUARD_ADDRESSES=111.111.111.111/32 # "Address" under [Interface] in WG Config
+      #- VPN_ENDPOINT_IP=111.111.111.111 # "Endpoint" under [Peer] in WG Config
+      #- VPN_ENDPOINT_PORT=51820 # should be the default 51820 but can confirm by seeing the port after IP in "Endpoint"
+      #- VPN_DNS_ADDRESS=111.111.111.111 # "DNS" under [Interface] in WG Config
+      - VPN_PORT_FORWARDING=on
+      #- VPN_PORT_FORWARDING_PROVIDER=protonvpn
+      # Timezone for accurate log times
+      - TZ=America/Sao_Paulo
+      # Server list updater
+      # See https://github.com/qdm12/gluetun-wiki/blob/main/setup/servers.md#update-the-vpn-servers-list
+      - UPDATER_PERIOD=24h
+      - SERVER_COUNTRIES=Brazil
+    restart: always
+  
+  plex:
+    container_name: plex
+    image: plexinc/pms-docker
+    network_mode: "host" 
+    restart: unless-stopped
+
+    environment:
+      - PGID=1000
+      - UMASK=002
+      - PUID=1000
+      - PLEX_CLAIM=your_plex_claim
+      - TZ=America/Sao_Paulo
+      - ADVERTISE_IP=http://111.111.111.111:32400/
+    volumes:
+      - /plex/config/plex:/config
+      - /data/media:/data/media
+    devices:
+      - /dev/dri:/dev/dri
+  
+  prowlarr:
+    container_name: prowlarr
+    network_mode: container:gluetun
+    image: ghcr.io/hotio/prowlarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /plex/config/prowlarr:/config
+      - /data/media:/data/media  # transmission watch directory
+
+    restart: unless-stopped
+    healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
+      test: "curl -sf https://example.com  || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 1
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+
+  sonarr:
+    container_name: sonarr
+    network_mode: container:gluetun
+    image: ghcr.io/hotio/sonarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /plex/config/sonarr:/config
+      - /data/media:/data/media
+    restart: unless-stopped
+    healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
+      test: "curl -sf https://example.com  || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 1
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+
+  radarr:
+    container_name: radarr
+    network_mode: container:gluetun
+    image: ghcr.io/hotio/radarr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /plex/config/radarr:/config
+      - /data/media:/data/media
+
+    restart: unless-stopped
+    healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
+      test: "curl -sf https://example.com  || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 1
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    network_mode: container:gluetun
+    container_name: qbittorrent
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=America/Sao_Paulo
+      - WEBUI_PORT=8080
+      - GSP_GTN_API_KEY=your_gluetun_api_key
+      - DOCKER_MODS=ghcr.io/t-anc/gsp-qbittorent-gluetun-sync-port-mod:main
+    volumes:
+      - /plex/config/qbittorrent:/config
+      - /data/media/downloads:/data/media/downloads
+    restart: unless-stopped
+    healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
+      test: "curl -sf https://example.com  || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 1
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    network_mode: container:gluetun
+    container_name: overseerr
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - UMASK=002
+      - TZ=America/Sao_Paulo
+    volumes:
+      - /plex/config/overseerr:/config
+    restart: unless-stopped
+    healthcheck: # https://github.com/qdm12/gluetun/issues/641#issuecomment-933856220
+      test: "curl -sf https://example.com  || exit 1"
+      interval: 1m
+      timeout: 10s
+      retries: 1
+    depends_on:
+      gluetun:
+        condition: service_healthy
+        restart: true
+
+    
